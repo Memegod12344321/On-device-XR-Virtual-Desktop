@@ -1,5 +1,5 @@
 # On-device-XR-Workspace-System
-On-device XR Workspace System Using Real-time Hand Gesture Recognition (Undergraduate Capstone Project)
+On-device XR Workspace System Using Real-time Hand Gesture Recognition
 > The `Library/` folder has been excluded from this repository due to GitHub's file size limitations.
 
 ### Project Overview
