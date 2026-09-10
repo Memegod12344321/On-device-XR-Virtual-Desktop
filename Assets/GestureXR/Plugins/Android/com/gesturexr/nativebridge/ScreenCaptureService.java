@@ -16,8 +16,6 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.IBinder;
 
-import androidx.annotation.Nullable;
-
 import java.nio.ByteBuffer;
 
 public class ScreenCaptureService extends Service {
@@ -27,6 +25,7 @@ public class ScreenCaptureService extends Service {
     private static final int NOTIFICATION_ID = 4173;
     private static final int MAX_WIDTH = 1280;
     private static final int MAX_HEIGHT = 720;
+    private static ScreenCaptureService instance;
 
     private MediaProjection projection;
     private VirtualDisplay display;
@@ -45,9 +44,24 @@ public class ScreenCaptureService extends Service {
         else context.startService(intent);
     }
 
-    @Override
-    public void onCreate() {
+    public static byte[] getLatestFrameStatic() {
+        ScreenCaptureService s = instance;
+        return s == null ? null : s.getLatestFrame();
+    }
+
+    public static int getWidthStatic() {
+        ScreenCaptureService s = instance;
+        return s == null ? 0 : s.width;
+    }
+
+    public static int getHeightStatic() {
+        ScreenCaptureService s = instance;
+        return s == null ? 0 : s.height;
+    }
+
+    @Override public void onCreate() {
         super.onCreate();
+        instance = this;
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(new NotificationChannel(
@@ -55,14 +69,10 @@ public class ScreenCaptureService extends Service {
         }
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            stopCapture();
-            stopSelf();
-            return START_NOT_STICKY;
+            stopCapture(); stopSelf(); return START_NOT_STICKY;
         }
-
         if (intent != null && ACTION_START.equals(intent.getAction())) {
             Notification notification = new Notification.Builder(this, CHANNEL)
                     .setContentTitle("Gesture XR")
@@ -80,7 +90,6 @@ public class ScreenCaptureService extends Service {
         int resultCode = intent.getIntExtra("resultCode", 0);
         Intent data = intent.getParcelableExtra("resultData");
         if (data == null) return;
-
         MediaProjectionManager manager =
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         projection = manager.getMediaProjection(resultCode, data);
@@ -109,7 +118,6 @@ public class ScreenCaptureService extends Service {
                 ByteBuffer buffer = plane.getBuffer();
                 int pixelStride = plane.getPixelStride();
                 int rowStride = plane.getRowStride();
-                int rowPadding = rowStride - pixelStride * width;
                 byte[] packed = new byte[width * height * 4];
                 byte[] row = new byte[rowStride];
                 for (int y = 0; y < height; y++) {
@@ -118,9 +126,7 @@ public class ScreenCaptureService extends Service {
                     int copy = Math.min(width * 4, read);
                     System.arraycopy(row, 0, packed, y * width * 4, copy);
                 }
-                synchronized (frameLock) {
-                    latestRgba = packed;
-                }
+                synchronized (frameLock) { latestRgba = packed; }
             } catch (Throwable ignored) {
             } finally {
                 if (image != null) image.close();
@@ -128,14 +134,9 @@ public class ScreenCaptureService extends Service {
         }, null);
 
         display = projection.createVirtualDisplay(
-                "GestureXR",
-                width,
-                height,
-                getResources().getDisplayMetrics().densityDpi,
+                "GestureXR", width, height, getResources().getDisplayMetrics().densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.getSurface(),
-                null,
-                null);
+                reader.getSurface(), null, null);
     }
 
     public byte[] getLatestFrame() {
@@ -143,9 +144,6 @@ public class ScreenCaptureService extends Service {
             return latestRgba == null ? null : latestRgba.clone();
         }
     }
-
-    public int getWidthValue() { return width; }
-    public int getHeightValue() { return height; }
 
     private void stopCapture() {
         if (display != null) { display.release(); display = null; }
@@ -156,8 +154,9 @@ public class ScreenCaptureService extends Service {
 
     @Override public void onDestroy() {
         stopCapture();
+        instance = null;
         super.onDestroy();
     }
 
-    @Nullable @Override public IBinder onBind(Intent intent) { return null; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 }
