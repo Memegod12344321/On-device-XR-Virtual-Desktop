@@ -6,10 +6,12 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -28,18 +30,24 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private TextView status, signInStatus, chatBox;
-    private EditText videoId, aiApiKey, youtubeApiKey;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private TextView status, signInStatus, chatPreview;
+    private EditText aiApiKey, youtubeApiKey, videoId;
     private Spinner providerSpinner, modelSpinner;
     private Button streamButton;
     private TextToSpeech tts;
     private boolean googleSignedIn = false;
+    private String activeLiveChatId = "";
+    private String nextPageToken = "";
+    private boolean chatPolling = false;
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -66,9 +74,8 @@ public class MainActivity extends Activity {
         e.setSingleLine(true);
         e.setPadding(16, 10, 16, 10);
         if (secret) {
-            // Password variation masks every typed character instead of exposing the key.
             e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            e.setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance());
+            e.setTransformationMethod(PasswordTransformationMethod.getInstance());
         }
         return e;
     }
@@ -76,7 +83,7 @@ public class MainActivity extends Activity {
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(28, 32, 28, 28);
+        root.setPadding(28, 28, 28, 28);
         root.setBackgroundColor(Color.rgb(12, 12, 16));
 
         TextView title = new TextView(this);
@@ -85,96 +92,92 @@ public class MainActivity extends Activity {
         title.setTextSize(26);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(title);
 
         status = new TextView(this);
         status.setText("Ready");
         status.setTextColor(Color.LTGRAY);
         status.setTextSize(16);
         status.setGravity(Gravity.CENTER);
-        root.addView(status, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(status);
 
         Button google = new Button(this);
         google.setText("SIGN IN WITH GOOGLE");
-        root.addView(google, new LinearLayout.LayoutParams(-1, -2));
-
+        root.addView(google);
         signInStatus = new TextView(this);
         signInStatus.setText("Not signed in");
         signInStatus.setTextColor(Color.GRAY);
         signInStatus.setGravity(Gravity.CENTER);
-        root.addView(signInStatus, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(signInStatus);
         google.setOnClickListener(v -> signInGoogle());
 
         root.addView(label("AI provider"));
         providerSpinner = new Spinner(this);
-        providerSpinner.setAdapter(new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_dropdown_item,
+        providerSpinner.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"Auto-detect", "OpenAI", "Groq"}));
-        root.addView(providerSpinner, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(providerSpinner);
 
-        root.addView(label("AI API key — hidden while typing"));
-        aiApiKey = field("Paste an OpenAI or Groq API key", true);
-        root.addView(aiApiKey, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(label("AI API key — every character is masked as •"));
+        aiApiKey = field("Paste your OpenAI or Groq API key", true);
+        root.addView(aiApiKey);
 
         Button detect = new Button(this);
-        detect.setText("DETECT KEY + LOAD ALL AVAILABLE MODELS");
-        root.addView(detect, new LinearLayout.LayoutParams(-1, -2));
+        detect.setText("DETECT PROVIDER + LOAD ALL MODELS");
+        root.addView(detect);
         detect.setOnClickListener(v -> loadModels());
 
-        root.addView(label("Model (loaded directly from provider)"));
+        root.addView(label("Model — loaded from the provider, not hardcoded"));
         modelSpinner = new Spinner(this);
-        modelSpinner.setAdapter(new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_dropdown_item,
+        modelSpinner.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"Enter an API key first"}));
-        root.addView(modelSpinner, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(modelSpinner);
 
-        root.addView(label("YouTube live video"));
-        videoId = field("YouTube video ID or live URL", false);
-        root.addView(videoId, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(label("YouTube live video ID or URL"));
+        videoId = field("https://youtube.com/watch?v=...", false);
+        root.addView(videoId);
 
-        root.addView(label("YouTube Data API key (for live chat access)"));
+        root.addView(label("YouTube Data API key — separate from AI key"));
         youtubeApiKey = field("Paste YouTube Data API key", true);
-        root.addView(youtubeApiKey, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(youtubeApiKey);
 
         Button connect = new Button(this);
-        connect.setText("CONNECT TO YOUTUBE CHAT");
-        root.addView(connect, new LinearLayout.LayoutParams(-1, -2));
+        connect.setText("CONNECT TO YOUTUBE LIVE CHAT");
+        root.addView(connect);
         connect.setOnClickListener(v -> connectToYouTube());
 
         streamButton = new Button(this);
-        streamButton.setText("START LIVESTREAM OVERLAY");
+        streamButton.setText("START STREAM OVERLAY");
         streamButton.setEnabled(false);
-        root.addView(streamButton, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(streamButton);
         streamButton.setOnClickListener(v -> startOverlay());
 
-        chatBox = new TextView(this);
-        chatBox.setText("CHAT BOX\n\nNothing is showing yet.");
-        chatBox.setTextColor(Color.WHITE);
-        chatBox.setTextSize(16);
-        chatBox.setBackgroundColor(Color.rgb(24, 24, 30));
-        chatBox.setPadding(18, 18, 18, 18);
-        root.addView(chatBox, new LinearLayout.LayoutParams(-1, 230));
+        chatPreview = new TextView(this);
+        chatPreview.setText("CHAT PREVIEW\n\nSign in, connect a live chat, then start the overlay.");
+        chatPreview.setTextColor(Color.WHITE);
+        chatPreview.setTextSize(16);
+        chatPreview.setBackgroundColor(Color.rgb(24, 24, 30));
+        chatPreview.setPadding(18, 18, 18, 18);
+        root.addView(chatPreview, new LinearLayout.LayoutParams(-1, 260));
 
         TextView info = new TextView(this);
-        info.setText("The livestream overlay contains only the chat box. TTS reads generated replies aloud. OpenAI and Groq model lists are fetched dynamically, so newly available models can appear without hardcoding versions.");
+        info.setText("OpenAI and Groq models are fetched from each provider's live /models endpoint. TTS uses Android's built-in speech engine. The stream overlay Activity contains only the chat box.");
         info.setTextColor(Color.GRAY);
         info.setTextSize(12);
-        root.addView(info, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(info);
 
         setContentView(root);
     }
 
     private void signInGoogle() {
         try {
-            // Opens Google's official account sign-in page. A real verified OAuth client ID/token
-            // is required for an app to obtain a Google/YouTube OAuth access token; this app does
-            // not embed a secret client credential.
+            // Opens Google's official sign-in page. A production YouTube OAuth flow requires a
+            // Google Cloud OAuth client ID and redirect configuration; no secret is embedded here.
             startActivity(new Intent(Intent.ACTION_VIEW,
                     Uri.parse("https://accounts.google.com/ServiceLogin?continue=https://www.youtube.com/")));
             googleSignedIn = true;
-            signInStatus.setText("Google sign-in opened — YouTube overlay unlocked");
+            signInStatus.setText("Google sign-in opened — stream button unlocked");
             streamButton.setEnabled(true);
-            status.setText("Google sign-in page opened");
+            status.setText("Google account step opened");
         } catch (Exception e) {
             status.setText("Could not open Google sign-in");
         }
@@ -183,8 +186,9 @@ public class MainActivity extends Activity {
     private String key() { return aiApiKey.getText().toString().trim(); }
 
     private String provider() {
-        if (providerSpinner.getSelectedItemPosition() == 1) return "openai";
-        if (providerSpinner.getSelectedItemPosition() == 2) return "groq";
+        int selected = providerSpinner.getSelectedItemPosition();
+        if (selected == 1) return "openai";
+        if (selected == 2) return "groq";
         String k = key().toLowerCase(Locale.US);
         if (k.startsWith("gsk_")) return "groq";
         if (k.startsWith("sk-")) return "openai";
@@ -195,107 +199,163 @@ public class MainActivity extends Activity {
         String k = key();
         String p = provider();
         if (k.isEmpty()) {
-            Toast.makeText(this, "Enter an API key", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Enter an API key first", Toast.LENGTH_SHORT).show();
             return;
         }
         if (p.isEmpty()) {
-            Toast.makeText(this, "Could not auto-detect this key. Choose OpenAI or Groq.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Unknown key format — choose OpenAI or Groq", Toast.LENGTH_SHORT).show();
             return;
         }
-
         status.setText("Loading every model available to this key…");
         executor.execute(() -> {
             try {
                 String endpoint = p.equals("groq")
                         ? "https://api.groq.com/openai/v1/models"
                         : "https://api.openai.com/v1/models";
+                JSONObject response = getJson(endpoint, k);
+                JSONArray data = response.optJSONArray("data");
+                if (data == null) throw new Exception("Provider returned no model list");
 
-                HttpURLConnection c = (HttpURLConnection) new URL(endpoint).openConnection();
-                c.setRequestMethod("GET");
-                c.setRequestProperty("Authorization", "Bearer " + k);
-                c.setConnectTimeout(12000);
-                c.setReadTimeout(12000);
-
-                int code = c.getResponseCode();
-                BufferedReader br = new BufferedReader(new InputStreamReader(
-                        code < 400 ? c.getInputStream() : c.getErrorStream()));
-                StringBuilder s = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) s.append(line);
-                br.close();
-
-                if (code >= 400) throw new Exception("HTTP " + code);
-
-                JSONArray data = new JSONObject(s.toString()).getJSONArray("data");
                 ArrayList<String> models = new ArrayList<>();
+                Set<String> seen = new HashSet<>();
                 for (int i = 0; i < data.length(); i++) {
                     String id = data.getJSONObject(i).optString("id");
-                    if (!id.isEmpty()) models.add(id);
+                    if (!id.isEmpty() && seen.add(id)) models.add(id);
                 }
                 models.sort(Comparator.naturalOrder());
 
-                runOnUiThread(() -> {
+                mainHandler.post(() -> {
                     modelSpinner.setAdapter(new ArrayAdapter<String>(this,
                             android.R.layout.simple_spinner_dropdown_item, models));
-                    status.setText("Loaded " + models.size() + " models from " + p.toUpperCase(Locale.US));
+                    status.setText("Loaded " + models.size() + " available " + p.toUpperCase(Locale.US) + " models");
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> status.setText("Model loading failed: " + e.getMessage()));
+                mainHandler.post(() -> status.setText("Model loading failed: " + e.getMessage()));
             }
         });
     }
 
+    private JSONObject getJson(String endpoint, String bearer) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(endpoint).openConnection();
+        c.setRequestMethod("GET");
+        c.setRequestProperty("Authorization", "Bearer " + bearer);
+        c.setRequestProperty("Accept", "application/json");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(15000);
+        int code = c.getResponseCode();
+        BufferedReader br = new BufferedReader(new InputStreamReader(code < 400 ? c.getInputStream() : c.getErrorStream()));
+        StringBuilder out = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) out.append(line);
+        br.close();
+        if (code >= 400) throw new Exception("HTTP " + code);
+        return new JSONObject(out.toString());
+    }
+
     private void connectToYouTube() {
-        String id = videoId.getText().toString().trim();
+        String id = extractVideoId(videoId.getText().toString().trim());
+        String ytKey = youtubeApiKey.getText().toString().trim();
         if (id.isEmpty()) {
-            Toast.makeText(this, "Enter a YouTube live ID or URL", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Enter a YouTube live video ID or URL", Toast.LENGTH_SHORT).show();
             return;
         }
-        String ytKey = youtubeApiKey.getText().toString().trim();
         if (ytKey.isEmpty()) {
             Toast.makeText(this, "Enter a YouTube Data API key", Toast.LENGTH_SHORT).show();
             return;
         }
-
-        status.setText("Checking YouTube live chat…");
+        status.setText("Connecting to live chat…");
         executor.execute(() -> {
             try {
-                String clean = id;
-                if (clean.contains("v=")) clean = clean.substring(clean.indexOf("v=") + 2);
-                if (clean.contains("&")) clean = clean.substring(0, clean.indexOf('&'));
-                if (clean.contains("youtu.be/")) clean = clean.substring(clean.lastIndexOf("/") + 1);
-
-                String q = "https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id="
-                        + URLEncoder.encode(clean, "UTF-8") + "&key="
-                        + URLEncoder.encode(ytKey, "UTF-8");
-
-                HttpURLConnection c = (HttpURLConnection) new URL(q).openConnection();
-                c.setConnectTimeout(12000);
-                c.setReadTimeout(12000);
-                int code = c.getResponseCode();
-                if (code >= 400) throw new Exception("YouTube API HTTP " + code);
-
-                BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream()));
-                StringBuilder s = new StringBuilder();
-                String l;
-                while ((l = br.readLine()) != null) s.append(l);
-                br.close();
-
-                JSONObject root = new JSONObject(s.toString());
-                if (root.getJSONArray("items").length() == 0) throw new Exception("Live video not found");
-                JSONObject details = root.getJSONArray("items").getJSONObject(0)
-                        .optJSONObject("liveStreamingDetails");
-                String chat = details == null ? "" : details.optString("activeLiveChatId", "");
-                if (chat.isEmpty()) throw new Exception("No active live chat on this stream");
-
-                runOnUiThread(() -> {
+                String url = "https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id="
+                        + URLEncoder.encode(id, "UTF-8") + "&key=" + URLEncoder.encode(ytKey, "UTF-8");
+                JSONObject root = getPlainJson(url);
+                JSONArray items = root.optJSONArray("items");
+                if (items == null || items.length() == 0) throw new Exception("Live video not found");
+                JSONObject details = items.getJSONObject(0).optJSONObject("liveStreamingDetails");
+                String chatId = details == null ? "" : details.optString("activeLiveChatId", "");
+                if (chatId.isEmpty()) throw new Exception("No active live chat on this stream");
+                activeLiveChatId = chatId;
+                nextPageToken = "";
+                chatPolling = true;
+                mainHandler.post(() -> {
                     status.setText("YouTube live chat connected");
-                    chatBox.setText("CHAT CONNECTED\n\nWaiting for messages…");
+                    chatPreview.setText("CHAT CONNECTED\n\nWaiting for messages…");
                 });
+                pollChat();
             } catch (Exception e) {
-                runOnUiThread(() -> status.setText("YouTube: " + e.getMessage()));
+                mainHandler.post(() -> status.setText("YouTube: " + e.getMessage()));
             }
         });
+    }
+
+    private JSONObject getPlainJson(String endpoint) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(endpoint).openConnection();
+        c.setRequestMethod("GET");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(15000);
+        int code = c.getResponseCode();
+        BufferedReader br = new BufferedReader(new InputStreamReader(code < 400 ? c.getInputStream() : c.getErrorStream()));
+        StringBuilder out = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) out.append(line);
+        br.close();
+        if (code >= 400) throw new Exception("HTTP " + code);
+        return new JSONObject(out.toString());
+    }
+
+    private String extractVideoId(String value) {
+        if (value == null) return "";
+        String s = value.trim();
+        if (s.contains("v=")) s = s.substring(s.indexOf("v=") + 2);
+        else if (s.contains("youtu.be/")) s = s.substring(s.lastIndexOf("/") + 1);
+        if (s.contains("&")) s = s.substring(0, s.indexOf('&'));
+        if (s.contains("?")) s = s.substring(0, s.indexOf('?'));
+        return s.trim();
+    }
+
+    private void pollChat() {
+        if (!chatPolling || activeLiveChatId.isEmpty()) return;
+        final String chatId = activeLiveChatId;
+        final String page = nextPageToken;
+        final String ytKey = youtubeApiKey.getText().toString().trim();
+        executor.execute(() -> {
+            try {
+                String url = "https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet,authorDetails&liveChatId="
+                        + URLEncoder.encode(chatId, "UTF-8") + "&maxResults=50&key="
+                        + URLEncoder.encode(ytKey, "UTF-8");
+                if (!page.isEmpty()) url += "&pageToken=" + URLEncoder.encode(page, "UTF-8");
+                JSONObject root = getPlainJson(url);
+                nextPageToken = root.optString("nextPageToken", "");
+                JSONArray items = root.optJSONArray("items");
+                if (items != null && items.length() > 0) {
+                    ArrayList<String> lines = new ArrayList<>();
+                    for (int i = 0; i < items.length(); i++) {
+                        JSONObject item = items.getJSONObject(i);
+                        JSONObject author = item.optJSONObject("authorDetails");
+                        JSONObject snippet = item.optJSONObject("snippet");
+                        String name = author == null ? "Viewer" : author.optString("displayName", "Viewer");
+                        String text = snippet == null ? "" : snippet.optString("displayMessage", "");
+                        if (!text.isEmpty()) lines.add(name + ": " + text);
+                    }
+                    if (!lines.isEmpty()) {
+                        mainHandler.post(() -> {
+                            chatPreview.setText(joinLines(lines));
+                            speak(lines.get(lines.size() - 1));
+                        });
+                    }
+                }
+            } catch (Exception ignored) {
+                // Keep polling; transient YouTube API errors should not kill the chat overlay.
+            }
+            mainHandler.postDelayed(this::pollChat, 2500);
+        });
+    }
+
+    private String joinLines(ArrayList<String> lines) {
+        StringBuilder b = new StringBuilder("LIVE CHAT\n\n");
+        int start = Math.max(0, lines.size() - 12);
+        for (int i = start; i < lines.size(); i++) b.append(lines.get(i)).append('\n');
+        return b.toString();
     }
 
     private void startOverlay() {
@@ -303,17 +363,18 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Sign in with Google first", Toast.LENGTH_SHORT).show();
             return;
         }
-        // Deliberately keep the visual overlay limited to the chat box.
-        chatBox.setText("LIVE\n\nChat is the only visual element in the stream overlay.\n\nAI replies can be spoken with TTS.");
-        speak("The AI debate stream is now live.");
-        status.setText("Livestream overlay active");
+        Intent i = new Intent(this, OverlayActivity.class);
+        i.putExtra("chat", chatPreview.getText().toString());
+        startActivity(i);
+        status.setText("Overlay opened — only the chat box is shown");
     }
 
     private void speak(String text) {
-        if (tts != null) tts.speak(text, TextToSpeech.QUEUE_ADD, null, "debate");
+        if (tts != null && !text.isEmpty()) tts.speak(text, TextToSpeech.QUEUE_ADD, null, "debate-" + System.currentTimeMillis());
     }
 
     @Override protected void onDestroy() {
+        chatPolling = false;
         if (tts != null) { tts.stop(); tts.shutdown(); }
         executor.shutdownNow();
         super.onDestroy();
