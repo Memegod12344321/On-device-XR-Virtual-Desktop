@@ -27,54 +27,61 @@ public final class FlyBrainMod implements ModInitializer {
     @Override
     public void onInitialize() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registerCommands(dispatcher));
+
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
             if (!isFly(entity)) return true;
+
             NeuralState state = BRAINS.computeIfAbsent(entity.getUuid(), id -> new NeuralState());
             state.stimulus = Math.max(state.stimulus, Math.min(1.0f, amount / 2.0f));
             state.activateNociception();
-            ServerWorld world = (ServerWorld) entity.getWorld();
-            world.getServer().getPlayerList().broadcastSystemMessage(
-                    Text.literal("[FlyBrain] nociception-like stimulus -> " + state.activeSummary()), false);
-            return false; // simulation only: the fly takes no actual Minecraft damage
-        });
-        ServerTickEvents.END_SERVER_TICK.register(server -> BRAINS.entrySet().removeIf(entry -> {
-            Entity entity = server.overworld().getEntity(entry.getKey());
-            if (entity == null || !entity.isAlive()) return true;
-            entry.getValue().tick();
+
+            if (entity.getEntityWorld() instanceof ServerWorld world) {
+                Text message = Text.literal("[FlyBrain] nociception-like stimulus -> " + state.activeSummary());
+                world.getPlayers().forEach(player -> player.sendMessage(message, false));
+            }
+
             return false;
+        });
+
+        ServerTickEvents.END_SERVER_TICK.register(server -> BRAINS.entrySet().removeIf(entry -> {
+            NeuralState state = entry.getValue();
+            state.tick();
+            return state.stimulus == 0;
         }));
     }
 
     private static void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher) {
-        dispatcher.register(CommandManager.literal("spawnfly").requires(s -> s.hasPermissionLevel(2))
+        dispatcher.register(CommandManager.literal("spawnfly")
                 .executes(ctx -> spawnFly(ctx.getSource())));
-        dispatcher.register(CommandManager.literal("flybrain").requires(s -> s.hasPermissionLevel(2))
+        dispatcher.register(CommandManager.literal("flybrain")
                 .executes(ctx -> reportBrains(ctx.getSource())));
     }
 
     private static int spawnFly(ServerCommandSource source) {
         ServerWorld world = source.getWorld();
-        BlockPos pos = BlockPos.containing(source.getPosition()).up();
+        BlockPos pos = BlockPos.ofFloored(source.getPosition()).up();
         BatEntity fly = EntityType.BAT.spawn(world, pos, SpawnReason.COMMAND);
         if (fly == null) {
             source.sendError(Text.literal("Could not spawn the simulated fly."));
             return 0;
         }
+
         fly.setCustomName(Text.literal("Drosophila melanogaster • Connectome"));
         fly.setCustomNameVisible(true);
         fly.addCommandTag("fruit_fly_connectome");
         BRAINS.put(fly.getUuid(), new NeuralState());
-        source.sendSuccess(() -> Text.literal("Spawned simulated Drosophila. Hit it to trigger the neural model."), true);
+        source.sendFeedback(() -> Text.literal("Spawned simulated Drosophila. Hit it to trigger the neural model."), true);
         return 1;
     }
 
     private static int reportBrains(ServerCommandSource source) {
         if (BRAINS.isEmpty()) {
-            source.sendSuccess(() -> Text.literal("No simulated fly brains are active."), false);
+            source.sendFeedback(() -> Text.literal("No simulated fly brains are active."), false);
             return 0;
         }
+
         for (NeuralState state : BRAINS.values()) {
-            source.sendSuccess(() -> Text.literal("Fly brain: stimulus=" + String.format("%.2f", state.stimulus)
+            source.sendFeedback(() -> Text.literal("Fly brain: stimulus=" + String.format("%.2f", state.stimulus)
                     + " active=" + state.activeSummary()), false);
         }
         return BRAINS.size();
@@ -105,8 +112,10 @@ public final class FlyBrainMod implements ModInitializer {
         String activeSummary() {
             if (neurons.isEmpty()) return "none";
             List<String> active = new ArrayList<>();
-            for (Map.Entry<String, Float> e : neurons.entrySet()) {
-                if (e.getValue() > 0.05f) active.add(e.getKey() + "=" + String.format("%.2f", e.getValue()));
+            for (Map.Entry<String, Float> entry : neurons.entrySet()) {
+                if (entry.getValue() > 0.05f) {
+                    active.add(entry.getKey() + "=" + String.format("%.2f", entry.getValue()));
+                }
             }
             return active.isEmpty() ? "none" : String.join(", ", active);
         }
