@@ -1,30 +1,8 @@
-# AI Debate Stream Bot
+# Fruit Fly Brain — Minecraft Fabric Mod
 
-Android-only YouTube live-chat debate bot.
+Minecraft Java 1.21.11 Fabric mod that simulates a Drosophila connectome. `/spawnfly` creates the simulated fly; hitting it triggers a nociception-like neural stimulus and `/flybrain` reports active nodes. This is a computer simulation, not real pain or suffering.
 
-## Current UI
-- Google sign-in button
-- Masked AI API-key field
-- OpenAI/Groq auto-detection and live model loading
-- YouTube live-chat connection button
-- Stream overlay button that opens the chat-only landscape overlay
-- Android built-in TTS for live chat messages
+The current graph is a small prototype. The next stage is importing published Drosophila connectome neuron IDs and synapse edges into the simulation.
 
-## MVP
-- Polls a YouTube live chat using the YouTube Data API v3.
-- Accepts `!topic Tyler defend Minecraft, William defend Roblox` commands.
-- Generates alternating Tyler/William arguments with Gemini.
-- Speaks each argument with Android's built-in Text-to-Speech.
-- Shows a clear disconnected/offline state when the device loses network access.
-- No camera, contacts, SMS, accessibility service, or microphone permission is used.
-
-## Setup
-1. Build/install the debug APK from the GitHub Actions artifact.
-2. Enter your YouTube API key, live video ID, and AI API key in the app. Keys are stored locally and are never committed to this repository.
-3. Start the bot/overlay.
-
-### Important
-This version includes the chat/TTS controller and chat-only overlay. It does not pretend to be a complete RTMP encoder. YouTube's actual outgoing livestream transport still requires a separate streaming layer.
-
-## Privacy
-The app requests only INTERNET and notification/foreground-service capabilities needed by the bot. It does not request camera, microphone, contacts, SMS, location, or storage permissions.
+## Build
+Use Java 21 and run `./gradlew build`. Fabric's 1.21.11 example targets Java 21, Loader 0.19.5, and Fabric API 0.141.6+1.21.11.
