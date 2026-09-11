@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "flybrain",
+  "version": "${version}",
+  "name": "Fruit Fly Brain",
+  "description": "A Minecraft simulation of a Drosophila connectome with a hit-triggered nociception-like neural response.",
+  "authors": ["Memegod12344321"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": { "main": ["com.memegod.flybrain.FlyBrainMod"] },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
