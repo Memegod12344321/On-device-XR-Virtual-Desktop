@@ -12,49 +12,89 @@ import net.minecraft.entity.passive.BatEntity;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public final class FlyBrainMod implements ModInitializer {
+    private static final String FLY_TAG = "fruit_fly_connectome";
     private static final Map<UUID, NeuralState> BRAINS = new LinkedHashMap<>();
+    private static final Map<UUID, Integer> DAMAGE_COUNTS = new HashMap<>();
+    private static final Set<UUID> DANCING = new HashSet<>();
+    private static boolean soundFly;
 
     @Override
     public void onInitialize() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registerCommands(dispatcher));
 
-        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
-            if (!isFly(entity)) return true;
+        ServerLivingEntityEvents.AFTER_DAMAGE.register((entity, source, baseDamage, damageTaken, blocked) -> {
+            if (!isFly(entity) || damageTaken <= 0) return;
 
             NeuralState state = BRAINS.computeIfAbsent(entity.getUuid(), id -> new NeuralState());
-            state.stimulus = Math.max(state.stimulus, Math.min(1.0f, amount / 2.0f));
+            state.stimulus = Math.max(state.stimulus, Math.min(1.0f, damageTaken / 2.0f));
             state.activateNociception();
 
-            if (entity.getEntityWorld() instanceof ServerWorld world) {
-                Text message = Text.literal("[FlyBrain] nociception-like stimulus -> " + state.activeSummary());
-                world.getPlayers().forEach(player -> player.sendMessage(message, false));
+            int hits = DAMAGE_COUNTS.merge(entity.getUuid(), 1, Integer::sum);
+            if (soundFly && entity.getEntityWorld() instanceof ServerWorld world) {
+                float pitch = Math.min(2.0f, 0.85f + hits * 0.06f);
+                float volume = Math.min(1.5f, 0.25f + hits * 0.05f);
+                world.playSound(null, entity.getX(), entity.getY(), entity.getZ(),
+                        SoundEvents.ENTITY_BAT_HURT, entity.getSoundCategory(), volume, pitch);
             }
 
-            return false;
+            if (entity.getEntityWorld() instanceof ServerWorld world) {
+                Text message = Text.literal("[FlyBrain] simulated nociception stimulus -> " + state.activeSummary());
+                world.getPlayers().forEach(player -> player.sendMessage(message, false));
+            }
         });
 
-        ServerTickEvents.END_SERVER_TICK.register(server -> BRAINS.entrySet().removeIf(entry -> {
-            NeuralState state = entry.getValue();
-            state.tick();
-            return state.stimulus == 0;
-        }));
+        ServerTickEvents.END_WORLD_TICK.register(world -> {
+            BRAINS.entrySet().removeIf(entry -> {
+                NeuralState state = entry.getValue();
+                state.tick();
+                return state.stimulus == 0;
+            });
+
+            for (Entity entity : world.iterateEntities()) {
+                if (!(entity instanceof BatEntity fly) || !isFly(fly) || !DANCING.contains(fly.getUuid())) continue;
+                long t = world.getTime() + fly.getId() * 7L;
+                double side = Math.sin(t * 0.45) * 0.08;
+                double up = Math.cos(t * 0.70) * 0.055;
+                double forward = Math.cos(t * 0.30) * 0.035;
+                fly.setVelocity(new Vec3d(forward, up, side));
+                fly.setYaw((float) (Math.sin(t * 0.18) * 70.0));
+                fly.setPitch((float) (Math.cos(t * 0.25) * 25.0));
+                fly.velocityDirty = true;
+            }
+        });
     }
 
     private static void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(CommandManager.literal("spawnfly")
                 .executes(ctx -> spawnFly(ctx.getSource())));
+
         dispatcher.register(CommandManager.literal("flybrain")
                 .executes(ctx -> reportBrains(ctx.getSource())));
+
+        dispatcher.register(CommandManager.literal("soundfly")
+                .executes(ctx -> {
+                    soundFly = !soundFly;
+                    ctx.getSource().sendFeedback(() -> Text.literal("SoundFly " + (soundFly ? "enabled" : "disabled") + "."), true);
+                    return 1;
+                }));
+
+        dispatcher.register(CommandManager.literal("dancemode")
+                .executes(ctx -> toggleDance(ctx.getSource())));
     }
 
     private static int spawnFly(ServerCommandSource source) {
@@ -68,9 +108,42 @@ public final class FlyBrainMod implements ModInitializer {
 
         fly.setCustomName(Text.literal("Drosophila melanogaster • Connectome"));
         fly.setCustomNameVisible(true);
-        fly.addCommandTag("fruit_fly_connectome");
+        fly.addCommandTag(FLY_TAG);
+        fly.setNoGravity(true);
         BRAINS.put(fly.getUuid(), new NeuralState());
-        source.sendFeedback(() -> Text.literal("Spawned simulated Drosophila. Hit it to trigger the neural model."), true);
+        source.sendFeedback(() -> Text.literal("Spawned simulated Drosophila."), true);
+        return 1;
+    }
+
+    private static int toggleDance(ServerCommandSource source) {
+        ServerWorld world = source.getWorld();
+        Vec3d origin = source.getPosition();
+        BatEntity nearest = null;
+        double best = 16.0 * 16.0;
+
+        for (Entity entity : world.iterateEntities()) {
+            if (entity instanceof BatEntity bat && isFly(bat)) {
+                double distance = bat.squaredDistanceTo(origin);
+                if (distance < best) {
+                    best = distance;
+                    nearest = bat;
+                }
+            }
+        }
+
+        if (nearest == null) {
+            source.sendError(Text.literal("No simulated fly within 16 blocks."));
+            return 0;
+        }
+
+        UUID id = nearest.getUuid();
+        if (DANCING.add(id)) {
+            nearest.setNoGravity(true);
+            source.sendFeedback(() -> Text.literal("Dance mode enabled for the nearest simulated fly."), true);
+        } else {
+            DANCING.remove(id);
+            source.sendFeedback(() -> Text.literal("Dance mode disabled."), true);
+        }
         return 1;
     }
 
@@ -88,7 +161,7 @@ public final class FlyBrainMod implements ModInitializer {
     }
 
     private static boolean isFly(Entity entity) {
-        return entity instanceof BatEntity && entity.getCommandTags().contains("fruit_fly_connectome");
+        return entity instanceof BatEntity && entity.getCommandTags().contains(FLY_TAG);
     }
 
     private static final class NeuralState {
