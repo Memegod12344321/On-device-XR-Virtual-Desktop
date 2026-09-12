@@ -1,0 +1,45 @@
+name: Build FlyBrain Fabric Mod
+
+on:
+  push:
+    paths:
+      - 'src/main/**'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradlew'
+      - 'gradle/**'
+      - 'fabric.mod.json'
+      - '.github/workflows/flybrain-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      - name: Build JAR
+        run: ./gradlew build --no-daemon
+
+      - name: Upload Fabric JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: flybrain-fabric-jar
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 30
