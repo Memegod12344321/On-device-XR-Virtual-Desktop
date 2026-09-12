@@ -42,3 +42,5 @@ jobs:
           path: build/libs/*.jar
           if-no-files-found: error
           retention-days: 14
+
+# Automatic build trigger: pushing this workflow also starts the build.
