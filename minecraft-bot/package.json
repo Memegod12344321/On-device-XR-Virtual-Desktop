@@ -1,0 +1,13 @@
+{
+  "name": "minecraft-server-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mineflayer player bot for a Minecraft server",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.31.0"
+  }
+}
